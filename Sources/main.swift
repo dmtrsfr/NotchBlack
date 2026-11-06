@@ -22,6 +22,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var menuCovers: [(window: NSWindow, bar: NSRect, screen: NSScreen, side: Side)] = []
     private var menuCoverSignature = ""
     private var hoverTimer: Timer?
+    private let fadeItem = NSMenuItem(title: "Fade Menu Bar in Full Screen", action: #selector(toggleFade), keyEquivalent: "")
+    private var fullScreenCovers: [(window: NSWindow, bar: NSRect, screen: NSScreen)] = []
+    private var fullScreenSignature = ""
+    private var fullScreenTimer: Timer?
+    private var inFullScreen = false
+    private var fullScreenChecked = Date.distantPast
     private var menuBarOwnerObservation: NSKeyValueObservation?
     private var timer: Timer?
     private var failed: [String: String] = [:] // screen key -> wallpaper path we couldn't read
@@ -45,6 +51,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hideIcons: Bool {
         get { defaults.bool(forKey: "hideIcons") }
         set { defaults.set(newValue, forKey: "hideIcons") }
+    }
+
+    private var fadeFullScreen: Bool {
+        get { defaults.object(forKey: "fadeFullScreen") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "fadeFullScreen") }
     }
 
     /// generated file path -> original wallpaper path
@@ -93,6 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(menusItem)
         iconsItem.target = self
         menu.addItem(iconsItem)
+        fadeItem.target = self
+        menu.addItem(fadeItem)
         axItem.target = self
         menu.addItem(axItem)
         menu.addItem(loginItem)
@@ -128,6 +141,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menusItem.state = hideMenus ? .on : .off
         iconsItem.isEnabled = enabled
         iconsItem.state = hideIcons ? .on : .off
+        fadeItem.isEnabled = enabled
+        fadeItem.state = fadeFullScreen ? .on : .off
         if AXIsProcessTrusted() {
             axItem.title = lastIconCount >= 0 ? "Accessibility: on · \(lastIconCount) icons found" : "Accessibility: on"
         } else {
@@ -166,6 +181,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateMenuCovers()
     }
 
+    @objc private func toggleFade() {
+        fadeFullScreen.toggle()
+        if fadeFullScreen { askForAccessibility() }
+        updateFullScreenCovers()
+    }
+
     @objc private func pickCorners(_ sender: NSMenuItem) {
         cornerRadius = cornerSizes[sender.tag].1
         updateCorners()
@@ -192,6 +213,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func refresh() {
         updateCorners()
         updateMenuCovers()
+        updateFullScreenCovers()
+        fullScreenChecked = .distantPast // a space or app change: look again now
         layoutMenuCovers() // catches menus that change while an app is open
         var problem = false
         let ws = NSWorkspace.shared
@@ -409,6 +432,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         }
+    }
+
+    // MARK: - Fade the menu bar in full screen
+
+    /// In a full-screen app the whole menu bar (Apple logo, app name, menus, icons) goes black,
+    /// and fades back in while the pointer is in it. On desktops this cover stays invisible.
+    private func updateFullScreenCovers() {
+        let on = enabled && fadeFullScreen
+        let screens = NSScreen.screens.filter { $0.safeAreaInsets.top > 0 }
+        let sig = "\(on)|" + screens.map { "\($0.frame)|\(menuBarHeight($0))" }.joined(separator: ";")
+        guard sig != fullScreenSignature else { return }
+        fullScreenSignature = sig
+
+        fullScreenCovers.forEach { $0.window.orderOut(nil) }
+        fullScreenCovers.removeAll()
+        fullScreenTimer?.invalidate()
+        fullScreenTimer = nil
+        guard on else { return }
+
+        for screen in screens {
+            let h = menuBarHeight(screen)
+            let bar = NSRect(x: screen.frame.minX, y: screen.frame.maxY - h, width: screen.frame.width, height: h)
+            let w = NSWindow(contentRect: bar, styleMask: .borderless, backing: .buffered, defer: false)
+            w.isOpaque = true
+            w.backgroundColor = .black
+            w.hasShadow = false
+            w.ignoresMouseEvents = true
+            w.isReleasedWhenClosed = false
+            w.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 2)
+            // Unlike the other covers, this one also goes into full-screen spaces.
+            w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+            w.alphaValue = 0
+            w.orderFrontRegardless()
+            fullScreenCovers.append((w, bar, screen))
+        }
+
+        fullScreenTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            // Asking the front app costs more than reading the pointer: twice a second is enough.
+            if Date().timeIntervalSince(self.fullScreenChecked) > 0.5 {
+                self.inFullScreen = self.frontWindowIsFullScreen()
+                self.fullScreenChecked = Date()
+            }
+            let p = NSEvent.mouseLocation
+            for cover in self.fullScreenCovers {
+                let inBar = cover.bar.insetBy(dx: 0, dy: -2).contains(p)
+                let target: CGFloat = self.inFullScreen && !inBar ? 1 : 0
+                if cover.window.alphaValue != target {
+                    NSAnimationContext.runAnimationGroup { ctx in
+                        ctx.duration = 0.2
+                        cover.window.animator().alphaValue = target
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether the front app's window is in full screen, read via Accessibility.
+    private func frontWindowIsFullScreen() -> Bool {
+        guard AXIsProcessTrusted(), let app = menuBarApp() else { return false }
+        let el = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(el, 0.2)
+        var winRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
+              let winRef, CFGetTypeID(winRef) == AXUIElementGetTypeID() else { return false }
+        var full: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(winRef as! AXUIElement, "AXFullScreen" as CFString, &full) == .success else { return false }
+        return (full as? Bool) ?? false
     }
 
     private func axFrame(_ el: AXUIElement) -> CGRect? {
