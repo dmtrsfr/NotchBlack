@@ -6,6 +6,8 @@
 
 It also works as a lightweight replacement for menu bar managers like Bartender, Ice and Thaw, many of which stopped working when macOS 27 changed how the menu bar is drawn.
 
+Follow me on X for more stuff: [@dimasiefier](https://x.com/dimasiefier)
+
 ![NotchBlack on macOS 27: a black menu bar hiding the MacBook notch, with app menus and icons that appear on hover](docs/demo.gif)
 
 ## Features
@@ -119,5 +121,3 @@ It's built for macOS 27 and should run on macOS 13 and later, but older versions
 [MIT](LICENSE)
 
 NotchBlack is not affiliated with TopNotch or Apple.
-
-Follow for more stuff from me on X: [@dimasiefier](https://x.com/dimasiefier)
