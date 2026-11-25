@@ -119,3 +119,5 @@ It's built for macOS 27 and should run on macOS 13 and later, but older versions
 [MIT](LICENSE)
 
 NotchBlack is not affiliated with TopNotch or Apple.
+
+Follow for more stuff from me on X: [@dimasiefier](https://x.com/dimasiefier)
